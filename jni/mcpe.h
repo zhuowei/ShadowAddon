@@ -16,6 +16,7 @@ class ItemInstance;
 class Minecraft;
 class GuiMessage;
 class Options;
+class Level;
 
 class Material {
 public:
@@ -192,6 +193,8 @@ public:
 
 class Minecraft {
 public:
+	char filler[104]; // 0
+	Level* level; // 104
 	Minecraft(int, char**);
 
 	ServerCommandParser* getCommandParser();
@@ -211,8 +214,11 @@ public:
 
 class Matrix {
 public:
-	char filler0[40]; // from Matrix::identity
+	float m[4][4]; // from Matrix::identity
 	void translate(Vec3 const&);
+	void rotate(float, Vec3 const&);
+	void scale(Vec3 const&);
+	static Matrix IDENTITY;
 };
 
 class MatrixStack {
@@ -224,6 +230,8 @@ public:
 			Matrix* matrix; // see the calls to MatrixStack::push
 			~Ref();
 	};
+
+	Matrix* getTop();
 
 	static MatrixStack World;
 	static MatrixStack Projection;
@@ -242,4 +250,14 @@ public:
 	bool getBooleanValue(Option const*);
 	void set(Option const*, int);
 	void toggle(Option const*, int);
+};
+
+class Level {
+public:
+	float getSunAngle(float);
+};
+
+class Vec3 {
+public:
+	float x, y, z;
 };

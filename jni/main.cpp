@@ -44,7 +44,60 @@ static Matrix shadowModelViewInverse;
 
 static MinecraftClient* mc;
 
+static void (*GameRenderer_setupCamera_real)(GameRenderer*, float);
 static void (*GameRenderer_renderLevel_real)(GameRenderer*, float);
+
+// from glm
+
+static void orthoMatrix(Matrix& mat,
+		float left,
+		float right,
+		float bottom,
+		float top,
+		float zNear,
+		float zFar)
+{
+	mat.m[0][0] = 2.0f / (right - left);
+	mat.m[1][1] = 2.0f / (top - bottom);
+	mat.m[2][2] = - 2.0f / (zFar - zNear);
+	mat.m[3][0] = - (right + left) / (right - left);
+	mat.m[3][1] = - (top + bottom) / (top - bottom);
+	mat.m[3][2] = - (zFar + zNear) / (zFar - zNear);
+}
+
+// end glm
+
+static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
+	GameRenderer_setupCamera_real(self, f);
+	if (isShadowPass) {
+		glViewport(0, 0, shadowMapWidth, shadowMapHeight);
+
+		shadowProjection = Matrix::IDENTITY;
+
+		orthoMatrix(shadowProjection, -shadowMapHalfPlane, shadowMapHalfPlane, -shadowMapHalfPlane,
+			shadowMapHalfPlane, 0.05f, 256.0f);
+
+		shadowModelView = Matrix::IDENTITY;
+		shadowModelView.translate(Vec3 {0.0f, 0.0f, -100.0f});
+		shadowModelView.rotate(90.0f, Vec3 {1.0f, 0.0f, 0.0f});
+		float angle = -mc->level->getSunAngle(f) * 360.0f;
+		if (angle < -90.0 && angle > -270.0) {
+			// night time
+			shadowModelView.rotate(angle + 180.0f, Vec3 {0.0f, 0.0f, 1.0f});
+		} else {
+			// day time
+			shadowModelView.rotate(angle, Vec3 {0.0f, 0.0f, 1.0f});
+		}
+		// reduces jitter
+		//glTranslatef((float)x % 10.0f - 5.0f, (float)y % 10.0f - 5.0f, (float)z % 10.0f - 5.0f);
+
+		*(MatrixStack::Projection.getTop()) = shadowProjection;
+		//shadowProjectionInverse = invertMat4x(shadowProjection);
+
+		*(MatrixStack::View.getTop()) = shadowModelView; // I have no idea.
+		//shadowModelViewInverse = invertMat4x(shadowModelView);
+	}
+}
 
 static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks) {
 	mc = self->minecraft;
