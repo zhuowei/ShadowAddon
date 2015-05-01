@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <GLES2/gl2.h>
 
 class TileSource;
 class AABB;
@@ -17,6 +18,8 @@ class Minecraft;
 class GuiMessage;
 class Options;
 class Level;
+class MaterialPtr;
+class VertexFormat;
 
 class Material {
 public:
@@ -220,6 +223,7 @@ public:
 	void rotate(float, Vec3 const&);
 	void scale(Vec3 const&);
 	static Matrix IDENTITY;
+	static_assert(sizeof(m) == sizeof(float)*4*4, "Matrix size isn't 0x40!");
 };
 
 class MatrixStack {
@@ -266,4 +270,18 @@ public:
 class ShaderUniform {
 public:
 	static ShaderUniform* get(std::string name);
+};
+
+class RenderMaterialGroup {
+public:
+	MaterialPtr* getMaterial(std::string name);
+};
+
+class ShaderProgram;
+
+class Shader {
+public:
+	char filler[32]; // 0
+	GLuint program; // 32
+	void bind(VertexFormat const&, void*);
 };

@@ -6,6 +6,7 @@
 #include <Substrate.h>
 #include <GLES2/gl2.h>
 #include "mcpelauncher.h"
+#include <unordered_map>
 
 // from the original mod that this was ported from:
 // Code written by daxnitro.  Do what you want with it but give me some credit if you use it in whole or in part.
@@ -180,10 +181,61 @@ static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks
 	GameRenderer_renderLevel_real(self, partialTicks);
 }
 
+// shader
+
+class ShadowShaderInfo {
+public:
+	GLuint shadowSamplerUniform;
+	GLuint shadowPassUniform;
+	GLuint shadowProjectionUniform;
+	GLuint shadowViewUniform;
+	bool hasPopulated;
+	ShadowShaderInfo() : shadowSamplerUniform(0), shadowPassUniform(0), shadowProjectionUniform(0),
+		shadowViewUniform(0), hasPopulated(false) {
+	};
+	void dumpInfo() {
+		LOGI("shadowSampler %i shadowPass %i shadowProjection %i shadowView %i",
+			shadowSamplerUniform, shadowPassUniform, shadowProjectionUniform, shadowViewUniform);
+	}
+};
+static std::unordered_map<GLuint, ShadowShaderInfo> shaderInfo;
+static void (*Shader_bind_real)(Shader* self, VertexFormat const&, void* data);
+
+// for porting to iOS, this could just hook glUseProgram and it should be fine...
+static void Shader_bind_hook(Shader* self, VertexFormat const& format, void* data) {
+	Shader_bind_real(self, format, data);
+	GLuint program = self->program;
+	ShadowShaderInfo& info = shaderInfo[program];
+	if (!info.hasPopulated) {
+		info.shadowSamplerUniform = glGetUniformLocation(program, "shadow");
+		info.shadowPassUniform = glGetUniformLocation(program, "isShadowPass");
+		info.shadowProjectionUniform = glGetUniformLocation(program, "shadowProjection");
+		info.shadowViewUniform = glGetUniformLocation(program, "shadowView");
+		info.dumpInfo();
+	}
+	if (info.shadowSamplerUniform != 0) {
+		glUniform1i(info.shadowSamplerUniform, GL_TEXTURE7);
+	}
+	if (info.shadowPassUniform != 0) {
+		glUniform1i(info.shadowPassUniform, isShadowPass);
+	}
+	if (info.shadowProjectionUniform != 0) {
+		glUniform4fv(info.shadowProjectionUniform, sizeof(shadowProjection.m), (const GLfloat*) shadowProjection.m);
+	}
+	if (info.shadowViewUniform != 0) {
+		glUniform4fv(info.shadowViewUniform, sizeof(shadowModelView.m), (const GLfloat*) shadowModelView.m);
+	}
+	// TODO: swap out shaders when doing shadow pass
+}
+
+// end shader
+
 JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 	mcpelauncher_hook((void*) &GameRenderer::renderLevel, (void*) &GameRenderer_renderLevel_hook,
 		(void**) &GameRenderer_renderLevel_real);
 	mcpelauncher_hook((void*) &GameRenderer::setupCamera, (void*) &GameRenderer_setupCamera_hook,
 		(void**) &GameRenderer_setupCamera_real);
+	mcpelauncher_hook((void*) &Shader::bind, (void*) &Shader_bind_hook,
+		(void**) &Shader_bind_real);
 	return JNI_VERSION_1_2;
 }
