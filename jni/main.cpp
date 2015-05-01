@@ -5,6 +5,7 @@
 #include <mcpe.h>
 #include <Substrate.h>
 #include <GLES2/gl2.h>
+#include "mcpelauncher.h"
 
 // from the original mod that this was ported from:
 // Code written by daxnitro.  Do what you want with it but give me some credit if you use it in whole or in part.
@@ -15,6 +16,8 @@
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__))
 
 static bool isShadowPass = false;
+
+static bool hasSetup = false;
 
 // Shadow stuff
 
@@ -67,6 +70,53 @@ static void orthoMatrix(Matrix& mat,
 
 // end glm
 
+// setup
+
+static void setupShadowRenderTexture() {
+	if (shadowPassInterval <= 0) {
+		return;
+	}
+
+	// depth
+	glDeleteTextures(1, &sfbDepthTexture);
+	glGenTextures(1, &sfbDepthTexture);
+	glBindTexture(GL_TEXTURE_2D, sfbDepthTexture);
+
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+}
+
+static void setupShadowFrameBuffer() {
+	if (shadowPassInterval <= 0) {
+		return;
+	}
+
+	setupShadowRenderTexture();
+
+	glDeleteFramebuffers(1, &sfb);
+
+	glGenFramebuffers(1, &sfb);
+	glBindFramebuffer(GL_FRAMEBUFFER, sfb);
+
+	glDeleteRenderbuffers(1, &sfbDepthBuffer);
+	glGenRenderbuffers(1, &sfbDepthBuffer);
+	glBindRenderbuffer(GL_RENDERBUFFER, sfbDepthBuffer);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sfbDepthBuffer);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, sfbDepthTexture, 0);
+
+	int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		LOGI("Failed creating shadow framebuffer! (Status %d)", status);
+	}
+}
+
+// end setup
+
 static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
 	GameRenderer_setupCamera_real(self, f);
 	if (isShadowPass) {
@@ -101,6 +151,10 @@ static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
 
 static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks) {
 	mc = self->minecraft;
+	if (!hasSetup) {
+		setupShadowFrameBuffer();
+		hasSetup = true;
+	}
 	if (shadowPassInterval > 0 && --shadowPassCounter <= 0) { 
 		// do shadow pass
 		Options* options = mc->getOptions();
@@ -117,6 +171,8 @@ static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks
 		
 		glFlush();
 
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 		isShadowPass = false;
 
 		options->set(&Options::Option::THIRD_PERSON, preShadowPassThirdPersonView);
@@ -125,6 +181,9 @@ static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks
 }
 
 JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-	
+	mcpelauncher_hook((void*) &GameRenderer::renderLevel, (void*) &GameRenderer_renderLevel_hook,
+		(void**) &GameRenderer_renderLevel_real);
+	mcpelauncher_hook((void*) &GameRenderer::setupCamera, (void*) &GameRenderer_setupCamera_hook,
+		(void**) &GameRenderer_setupCamera_real);
 	return JNI_VERSION_1_2;
 }

@@ -210,6 +210,7 @@ class GameRenderer {
 public:
 	MinecraftClient* minecraft; // 0
 	void renderLevel(float);
+	void setupCamera(float);
 };
 
 class Matrix {
@@ -260,4 +261,9 @@ public:
 class Vec3 {
 public:
 	float x, y, z;
+};
+
+class ShaderUniform {
+public:
+	static ShaderUniform* get(std::string name);
 };
