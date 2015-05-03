@@ -3,6 +3,9 @@
 #include <vector>
 #include <functional>
 #include <GLES2/gl2.h>
+#define GLM_FORCE_RADIANS 1
+// TODO: switch to the correct version of GLM
+#include "glm/mat4x4.hpp"
 
 class TileSource;
 class AABB;
@@ -213,12 +216,12 @@ class GameRenderer {
 public:
 	MinecraftClient* minecraft; // 0
 	void renderLevel(float);
-	void setupCamera(float);
+	void setupCamera(float, int);
 };
 
 class Matrix {
 public:
-	float m[4][4]; // from Matrix::identity
+	glm::mat4x4 m; // from Matrix::identity
 	void translate(Vec3 const&);
 	void rotate(float, Vec3 const&);
 	void scale(Vec3 const&);

@@ -7,14 +7,20 @@
 #include <GLES2/gl2.h>
 #include "mcpelauncher.h"
 #include <unordered_map>
+#include <cmath>
+#include "glm/gtx/string_cast.hpp"
 
 // from the original mod that this was ported from:
 // Code written by daxnitro.  Do what you want with it but give me some credit if you use it in whole or in part.
 // end original copyright notice.
 
+// also portions from http://www.opengl-tutorial.org/intermediate-tutorials/tutorial-16-shadow-mapping/
+
 #define LOG_TAG "shadow"
 
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__))
+
+#define GLERROR() do { int err = glGetError(); if (err != 0) { LOGI("GL Error: %i line %i", err, __LINE__);} } while (0)
 
 static bool isShadowPass = false;
 
@@ -23,7 +29,7 @@ static bool hasSetup = false;
 // Shadow stuff
 
 // configuration
-static int shadowPassInterval   = 4;
+static int shadowPassInterval   = 1;
 static int shadowMapWidth       = 512;
 static int shadowMapHeight      = 512;
 static float shadowMapHalfPlane = 30.0f;
@@ -46,9 +52,11 @@ static Matrix shadowModelViewInverse;
 
 // end shadow stuff
 
+static bool useDepthExtension = false; // Tegra sucks
+
 static MinecraftClient* mc;
 
-static void (*GameRenderer_setupCamera_real)(GameRenderer*, float);
+static void (*GameRenderer_setupCamera_real)(GameRenderer*, float, int);
 static void (*GameRenderer_renderLevel_real)(GameRenderer*, float);
 
 // from glm
@@ -83,12 +91,24 @@ static void setupShadowRenderTexture() {
 	glGenTextures(1, &sfbDepthTexture);
 	glBindTexture(GL_TEXTURE_2D, sfbDepthTexture);
 
+	GLERROR();
+
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+	GLERROR();
+
+	if (useDepthExtension) {
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight,
+			0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+	} else {
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, shadowMapWidth, shadowMapHeight,
+			0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	}
+
+	GLERROR();
 }
 
 static void setupShadowFrameBuffer() {
@@ -103,23 +123,38 @@ static void setupShadowFrameBuffer() {
 	glGenFramebuffers(1, &sfb);
 	glBindFramebuffer(GL_FRAMEBUFFER, sfb);
 
+	GLERROR();
+
+	// https://forum.qt.io/topic/11451/opengl-es-2-0-the-depth-buffer-texture/6
+	// http://forum.unity3d.com/threads/unity-tegra-shadows.167686/
+
 	glDeleteRenderbuffers(1, &sfbDepthBuffer);
 	glGenRenderbuffers(1, &sfbDepthBuffer);
 	glBindRenderbuffer(GL_RENDERBUFFER, sfbDepthBuffer);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sfbDepthBuffer);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, sfbDepthTexture, 0);
+
+	if (useDepthExtension) {
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, shadowMapWidth, shadowMapHeight);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, sfbDepthBuffer);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, sfbDepthTexture, 0);
+	} else {
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA, shadowMapWidth, shadowMapHeight);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_RGBA, GL_RENDERBUFFER, sfbDepthBuffer);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sfbDepthTexture, 0);
+	}
+
+	GLERROR();
 
 	int status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE) {
 		LOGI("Failed creating shadow framebuffer! (Status %d)", status);
 	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 // end setup
 
-static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
-	GameRenderer_setupCamera_real(self, f);
+static void GameRenderer_setupCamera_hook(GameRenderer* self, float f, int mode) {
+	GameRenderer_setupCamera_real(self, f, mode);
 	if (isShadowPass) {
 		glViewport(0, 0, shadowMapWidth, shadowMapHeight);
 
@@ -131,7 +166,7 @@ static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
 		shadowModelView = Matrix::IDENTITY;
 		shadowModelView.translate(Vec3 {0.0f, 0.0f, -100.0f});
 		shadowModelView.rotate(90.0f, Vec3 {1.0f, 0.0f, 0.0f});
-		float angle = -mc->level->getSunAngle(f) * 360.0f;
+		float angle = -(mc->level->getSunAngle(f) / M_PI) * 180.0f;
 		if (angle < -90.0 && angle > -270.0) {
 			// night time
 			shadowModelView.rotate(angle + 180.0f, Vec3 {0.0f, 0.0f, 1.0f});
@@ -151,6 +186,7 @@ static void GameRenderer_setupCamera_hook(GameRenderer* self, float f) {
 }
 
 static void GameRenderer_renderLevel_hook(GameRenderer* self, float partialTicks) {
+		isShadowPass = true;
 	mc = self->minecraft;
 	if (!hasSetup) {
 		setupShadowFrameBuffer();
@@ -187,15 +223,13 @@ class ShadowShaderInfo {
 public:
 	GLuint shadowSamplerUniform;
 	GLuint shadowPassUniform;
-	GLuint shadowProjectionUniform;
-	GLuint shadowViewUniform;
+	GLuint shadowMVPUniform;
 	bool hasPopulated;
-	ShadowShaderInfo() : shadowSamplerUniform(0), shadowPassUniform(0), shadowProjectionUniform(0),
-		shadowViewUniform(0), hasPopulated(false) {
+	ShadowShaderInfo() : shadowSamplerUniform(0), shadowPassUniform(0), shadowMVPUniform(0), hasPopulated(false) {
 	};
 	void dumpInfo() {
-		LOGI("shadowSampler %i shadowPass %i shadowProjection %i shadowView %i",
-			shadowSamplerUniform, shadowPassUniform, shadowProjectionUniform, shadowViewUniform);
+		LOGI("shadowSampler %i shadowPass %i shadowMVP %i",
+			shadowSamplerUniform, shadowPassUniform, shadowMVPUniform);
 	}
 };
 static std::unordered_map<GLuint, ShadowShaderInfo> shaderInfo;
@@ -209,21 +243,29 @@ static void Shader_bind_hook(Shader* self, VertexFormat const& format, void* dat
 	if (!info.hasPopulated) {
 		info.shadowSamplerUniform = glGetUniformLocation(program, "shadow");
 		info.shadowPassUniform = glGetUniformLocation(program, "isShadowPass");
-		info.shadowProjectionUniform = glGetUniformLocation(program, "shadowProjection");
-		info.shadowViewUniform = glGetUniformLocation(program, "shadowView");
+		info.shadowMVPUniform = glGetUniformLocation(program, "shadowMVP");
+		LOGI("Populated shader %i", program);
 		info.dumpInfo();
+		info.hasPopulated = true;
+		GLERROR();
 	}
-	if (info.shadowSamplerUniform != 0) {
+	if (info.shadowSamplerUniform > 0) {
 		glUniform1i(info.shadowSamplerUniform, GL_TEXTURE7);
 	}
-	if (info.shadowPassUniform != 0) {
+	if (info.shadowPassUniform > 0) {
 		glUniform1i(info.shadowPassUniform, isShadowPass);
 	}
-	if (info.shadowProjectionUniform != 0) {
-		glUniform4fv(info.shadowProjectionUniform, sizeof(shadowProjection.m), (const GLfloat*) shadowProjection.m);
-	}
-	if (info.shadowViewUniform != 0) {
-		glUniform4fv(info.shadowViewUniform, sizeof(shadowModelView.m), (const GLfloat*) shadowModelView.m);
+	if (info.shadowMVPUniform > 0) {
+		glm::mat4 biasMatrix(
+		0.5, 0.0, 0.0, 0.0,
+		0.0, 0.5, 0.0, 0.0,
+		0.0, 0.0, 0.5, 0.0,
+		0.5, 0.5, 0.5, 1.0
+		);
+		glm::mat4 mvp = biasMatrix * shadowProjection.m * shadowModelView.m * MatrixStack::World.getTop()->m;
+		//glm::mat4 mvp = MatrixStack::Projection.getTop()->m * MatrixStack::View.getTop()->m * MatrixStack::World.getTop()->m;
+		//LOGI("Mat:\n%s", glm::to_string(mvp).c_str());
+		glUniformMatrix4fv(info.shadowMVPUniform, 1, false, &mvp[0][0]);
 	}
 	// TODO: swap out shaders when doing shadow pass
 }
