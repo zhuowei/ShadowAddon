@@ -250,7 +250,10 @@ static void Shader_bind_hook(Shader* self, VertexFormat const& format, void* dat
 		GLERROR();
 	}
 	if (info.shadowSamplerUniform > 0) {
-		glUniform1i(info.shadowSamplerUniform, GL_TEXTURE7);
+		glActiveTexture(GL_TEXTURE7);
+		glBindTexture(GL_TEXTURE_2D, sfbDepthTexture);
+		glUniform1i(info.shadowSamplerUniform, 7);
+		glActiveTexture(GL_TEXTURE0);
 	}
 	if (info.shadowPassUniform > 0) {
 		glUniform1i(info.shadowPassUniform, isShadowPass);
